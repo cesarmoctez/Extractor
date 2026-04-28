@@ -5,39 +5,56 @@ from pydantic import BaseModel
 from typing import List
 import pandas as pd
 from dotenv import load_dotenv
+import plotly.express as px # 🟢 NUEVO: Librería para gráficos profesionales
 
-# --- 1. CONFIGURACIÓN DE LA PÁGINA WEB ---
+# --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Extractor de Ingeniería TNG", page_icon="⚙️", layout="wide")
 
-# --- 2. MANEJO INTELIGENTE DE LA API KEY (Local vs Nube) ---
-# Intentamos cargar el .env local si existe
-load_dotenv()
+# --- 2. SISTEMA DE SEGURIDAD Y LOGIN ---
+# Inicializar variables de sesión si no existen
+if "acceso_concedido" not in st.session_state:
+    st.session_state.acceso_concedido = False
+if "usos_sesion" not in st.session_state:
+    st.session_state.usos_sesion = 0
 
-# Función segura para buscar la llave
-def obtener_api_key():
-    # 1. Intentamos leer desde las variables de entorno (Local .env)
-    llave = os.environ.get("GEMINI_API_KEY")
+# Pantalla de Login
+if not st.session_state.acceso_concedido:
+    st.title("🔒 Acceso Restringido")
+    st.markdown("Por favor, ingresa el código de acceso corporativo de TNG para continuar.")
     
-    # 2. Si no hay llave local, intentamos leer desde Streamlit Secrets (Nube)
+    pwd_ingresada = st.text_input("Código de Acceso", type="password")
+    
+    # Aquí definimos la contraseña (puedes cambiarla a lo que gustes)
+    PASSWORD_CORRECTA = "TNG2026" 
+    
+    if st.button("Ingresar"):
+        if pwd_ingresada == PASSWORD_CORRECTA:
+            st.session_state.acceso_concedido = True
+            st.rerun() # Recarga la página para mostrar la app
+        else:
+            st.error("❌ Código incorrecto. Acceso denegado.")
+    st.stop() # Detiene la ejecución del resto del código si no hay acceso
+
+# --- 3. MANEJO DE LA API KEY ---
+load_dotenv()
+def obtener_api_key():
+    llave = os.environ.get("GEMINI_API_KEY")
     if not llave:
         try:
-            # st.secrets a veces requiere que el diccionario exista, usemos .get
             llave = st.secrets.get("GEMINI_API_KEY") 
-        except Exception: # Atrapamos cualquier error si la carpeta .streamlit no existe
+        except Exception:
             pass
-            
     return llave
 
 api_key = obtener_api_key()
 
 if not api_key:
-    st.error("❌ No se encontró la API Key de Gemini. Verifica tu archivo .env o los Secrets de Streamlit.")
-    st.stop() # Detiene la app si no hay llave
+    st.error("❌ No se encontró la API Key de Gemini.")
+    st.stop()
 
-# Iniciamos el motor de Airi
 client = genai.Client(api_key=api_key)
 
-# --- 3. ESQUEMA DE DATOS (El Molde de Titanio) ---
+# --- 4. ESQUEMA DE DATOS ---
 class ItemFactura(BaseModel):
     cantidad: float
     unidad: str
@@ -53,36 +70,44 @@ class FacturaIngenieria(BaseModel):
     moneda: str
     items: List[ItemFactura]
     total: float
-    resumen_ejecutivo: str # Airi opinando sobre el documento
+    resumen_ejecutivo: str
 
-# --- 4. DISEÑO DE LA APLICACIÓN WEB ---
+# --- 5. DISEÑO DE LA APLICACIÓN WEB ---
 st.title("🤖 Asistente Airi: Extracción y Análisis de Acero")
-st.markdown("Arquitectura de IA Generativa para la automatización del área de Costos e Ingeniería.")
 
-# El cargador de archivos
-archivo_subido = st.file_uploader("Arrastra una cotización o factura (PDF, JPG, PNG)", type=['pdf', 'png', 'jpg', 'jpeg'])
+# Mostrar contador de usos
+st.info(f"📊 Usos en esta sesión: {st.session_state.usos_sesion} / 10")
+
+# Límite de 10 usos
+if st.session_state.usos_sesion >= 10:
+    st.error("🛑 Has alcanzado el límite máximo de extracciones por sesión. Contacta al administrador.")
+    st.stop()
+
+archivo_subido = st.file_uploader("Arrastra una cotización o factura (PDF, JPG, PNG) Máx. 5MB", type=['pdf', 'png', 'jpg', 'jpeg'])
 
 if archivo_subido is not None:
-    # Mensaje de espera
+    
+    # 🟢 NUEVO: Límite de Peso (5 MB)
+    MAX_SIZE = 5 * 1024 * 1024 # 5 MB en bytes
+    if archivo_subido.size > MAX_SIZE:
+        st.error(f"❌ El archivo pesa {archivo_subido.size / (1024*1024):.2f} MB. El límite es de 5 MB por motivos de seguridad.")
+        st.stop()
+
     with st.spinner('⚙️ Airi está analizando el documento y construyendo el dashboard...'):
         
-        # Guardamos temporalmente el archivo subido para que Gemini lo procese
         ruta_temporal = f"temp_{archivo_subido.name}"
         with open(ruta_temporal, "wb") as f:
             f.write(archivo_subido.getbuffer())
         
-        # Subimos el archivo al núcleo
         archivo_gemini = client.files.upload(file=ruta_temporal)
 
-        # Instrucciones de nivel superior
         prompt = """
         Analiza este documento de ingeniería. 
         1. Extrae los datos técnicos y el número de folio.
         2. Pon especial atención al ACERO (grados y normas ASTM, ISO). 
-        3. Escribe un 'resumen_ejecutivo' muy breve (máximo 2 líneas) indicando qué tipo de materiales se están cobrando y si notas que falta algún dato importante como la norma del acero.
+        3. Escribe un 'resumen_ejecutivo' muy breve (máximo 2 líneas).
         """
 
-        # Procesamiento
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[prompt, archivo_gemini],
@@ -93,23 +118,20 @@ if archivo_subido is not None:
         )
 
         datos = response.parsed
-        
-        # Limpieza: borramos el archivo temporal
         os.remove(ruta_temporal)
+        
+        # Aumentar el contador de uso
+        st.session_state.usos_sesion += 1
 
-    # --- 5. ZONA DEL GERENTE (EL EFECTO WOW) ---
+    # --- ZONA DEL GERENTE ---
     st.success("✅ Análisis Completado en Segundos")
-    
-    # El Resumen Ejecutivo
     st.info(f"**🧠 Análisis de Airi:** {datos.resumen_ejecutivo}")
     
-    # Tarjetas de datos rápidos
     col1, col2, col3 = st.columns(3)
     col1.metric("Folio del Documento", datos.folio)
     col2.metric("Proveedor", datos.proveedor)
     col3.metric("Monto Total", f"${datos.total:,.2f} {datos.moneda}")
 
-    # Convertimos los items a una tabla de pandas
     filas = []
     for item in datos.items:
         filas.append({
@@ -123,19 +145,20 @@ if archivo_subido is not None:
     
     df = pd.DataFrame(filas)
     
-    # Creamos pestañas para mostrar diferentes vistas (El gran final)
     tab1, tab2, tab3 = st.tabs(["📊 Gráfico de Costos", "📦 Datos Tabulares", "⚙️ Integración JSON"])
     
     with tab1:
         st.write("### Distribución de Costos por Material")
         if not df.empty and "Importe" in df.columns:
-            df_grafico = df.groupby("Descripción")["Importe"].sum()
-            st.bar_chart(df_grafico)
+            # 🟢 NUEVO: Gráfico de Pastel Interactivo y hermoso con Plotly
+            df_grafico = df.groupby("Descripción")["Importe"].sum().reset_index()
+            fig = px.pie(df_grafico, values='Importe', names='Descripción', hole=0.4)
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, use_container_width=True)
             
     with tab2:
         st.write("### Base de Datos Extraída")
         st.dataframe(df, use_container_width=True)
-        # Botón de Descarga
         csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Exportar a Excel (CSV)",
@@ -146,4 +169,4 @@ if archivo_subido is not None:
         
     with tab3:
         st.write("### Código Puro (Listo para API/ERP)")
-        st.json(response.text) # Mostramos el JSON en crudo
+        st.json(response.text)
