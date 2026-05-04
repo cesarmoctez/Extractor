@@ -25,7 +25,7 @@ if not st.session_state.acceso_concedido:
     pwd_ingresada = st.text_input("Código de Acceso", type="password")
     
     # Aquí definimos la contraseña (puedes cambiarla a lo que gustes)
-    PASSWORD_CORRECTA = "TNG2026" 
+    PASSWORD_CORRECTA = "TNG202605" 
     
     if st.button("Ingresar"):
         if pwd_ingresada == PASSWORD_CORRECTA:
